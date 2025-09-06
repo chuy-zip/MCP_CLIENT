@@ -9,4 +9,5 @@ npm install
 node build/index.js "Ruta a donde se clono el server"
 
 Ejemplo
+
 node build/index.js ../MCP_SERVER/build/index.js

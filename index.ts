@@ -185,6 +185,51 @@ class MCPClient {
                     continue;
                 }
 
+                if (message.toLowerCase() === "history_summary") {
+                    console.log("\nConversation History (Summary):");
+                    this.conversationHistory.forEach((msg, index) => {
+                        const role = msg.role === "user" ? "User" : "Assistant";
+                        let contentPreview = "";
+
+                        if (typeof msg.content === "string") {
+                            contentPreview = msg.content.substring(0, 50) + (msg.content.length > 50 ? "..." : "");
+                        } else if (Array.isArray(msg.content)) {
+                            // Para tool calls y tool results
+                            const firstItem = msg.content[0];
+                            if (firstItem.type === "tool_use") {
+                                contentPreview = `Tool Call: ${firstItem.name}`;
+                            } else if (firstItem.type === "tool_result") {
+                                contentPreview = "Tool Result";
+                            } else {
+                                contentPreview = "Complex content";
+                            }
+                        }
+
+                        console.log(`${index + 1}. ${role}: ${contentPreview}`);
+                    });
+                    continue;
+                }
+
+                if (message.toLowerCase() === "history_complete") {
+                    console.log("\nConversation History (Complete):");
+                    this.conversationHistory.forEach((msg, index) => {
+                        const role = msg.role === "user" ? "User" : "Assistant";
+
+                        let contentStr = "";
+                        if (typeof msg.content === "string") {
+                            contentStr = msg.content;
+                        } else if (Array.isArray(msg.content)) {
+                            contentStr = JSON.stringify(msg.content, null, 2);
+                        } else {
+                            contentStr = String(msg.content);
+                        }
+
+                        console.log(`${index + 1}. ${role}: ${contentStr}`);
+                        console.log("---"); 
+                    });
+                    continue;
+                }
+
                 console.log("Assistant:");
                 const response = await this.processQuery(message);
                 console.log(response);
