@@ -1,10 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk";
-import {
-    MessageParam,
-    Tool,
-} from "@anthropic-ai/sdk/resources/messages/messages.mjs";
+import { Tool, MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"; // para cosas remotas
 import readline from "readline/promises";
 import dotenv from "dotenv";
 
@@ -18,7 +15,7 @@ if (!ANTHROPIC_API_KEY) {
 class MCPClient {
     private mcp: Client;
     private anthropic: Anthropic;
-    private transport: StdioClientTransport | null = null;
+    private transport: SSEClientTransport | null = null; // Transporte SSE
     private tools: Tool[] = [];
     private conversationHistory: MessageParam[] = [];
 
@@ -32,23 +29,14 @@ class MCPClient {
         });
     }
 
-    async connectToServer(serverScriptPath: string) {
+    async connectToServer(serverUrl: string) { // ← Ahora recibe URL en lugar de path
         try {
-            const isJs = serverScriptPath.endsWith(".js");
-            const isPy = serverScriptPath.endsWith(".py");
-            if (!isJs && !isPy) {
-                throw new Error("Server script must be a .js or .py file");
-            }
-
-            const command = isPy
-                ? process.platform === "win32" ? "python" : "python3"
-                : "node";
-
-            this.transport = new StdioClientTransport({
-                command,
-                args: [serverScriptPath],
-            });
-
+            const baseUrl = new URL(serverUrl);
+            console.log(`Connecting to MCP server at: ${baseUrl}`);
+            
+            // Usar transporte SSE para conexión HTTP remota
+            this.transport = new SSEClientTransport(baseUrl);
+            
             await this.mcp.connect(this.transport);
 
             const toolsResult = await this.mcp.listTools();
