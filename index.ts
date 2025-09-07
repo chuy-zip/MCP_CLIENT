@@ -1,7 +1,8 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import { Tool, MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"; // para cosas remotas
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"; // ← Mantener para local
 import readline from "readline/promises";
 import dotenv from "dotenv";
 
@@ -15,7 +16,7 @@ if (!ANTHROPIC_API_KEY) {
 class MCPClient {
     private mcp: Client;
     private anthropic: Anthropic;
-    private transport: SSEClientTransport | null = null; // Transporte SSE
+    private transport: any = null;
     private tools: Tool[] = [];
     private conversationHistory: MessageParam[] = [];
 
@@ -29,14 +30,31 @@ class MCPClient {
         });
     }
 
-    async connectToServer(serverUrl: string) { // ← Ahora recibe URL en lugar de path
+    async connectToServer(target: string) {
         try {
-            const baseUrl = new URL(serverUrl);
-            console.log(`Connecting to MCP server at: ${baseUrl}`);
-            
-            // Usar transporte SSE para conexión HTTP remota
-            this.transport = new SSEClientTransport(baseUrl);
-            
+            // DETECTAR MODO: REMOTO (HTTP) vs LOCAL (archivo)
+            if (target.startsWith('http://') || target.startsWith('https://')) {
+                // MODO REMOTO
+                const baseUrl = new URL(target);
+                console.log(`Connecting to REMOTE MCP server: ${target}`);
+                this.transport = new SSEClientTransport(baseUrl);
+            } else {
+                // MODO LOCAL
+                console.log(`Connecting to LOCAL MCP server: ${target}`);
+                const isJs = target.endsWith(".js");
+                const isPy = target.endsWith(".py");
+                
+                if (!isJs && !isPy) {
+                    throw new Error("Server must be .js or .py file for local mode");
+                }
+
+                const command = isPy ? (process.platform === "win32" ? "python" : "python3") : "node";
+                this.transport = new StdioClientTransport({
+                    command,
+                    args: [target],
+                });
+            }
+
             await this.mcp.connect(this.transport);
 
             const toolsResult = await this.mcp.listTools();
@@ -47,12 +65,12 @@ class MCPClient {
             } as Tool));
 
             console.log(
-                "Connected to server with tools:",
+                "Connected with tools:",
                 this.tools.map((tool) => tool.name)
             );
 
         } catch (error) {
-            console.log("Failed to connect to MCP server: ", error);
+            console.log("Failed to connect:", error);
             throw error;
         }
     }

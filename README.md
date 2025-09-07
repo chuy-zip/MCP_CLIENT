@@ -5,7 +5,7 @@ Cliente hecho con anthropic para poder hacer uso de MCP's
 npm install
 
 
-### Uso
+### Local MCP
 node build/index.js "Ruta a donde se clono el server"
 
 Ejemplo
