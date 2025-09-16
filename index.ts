@@ -190,7 +190,7 @@ class MCPClient {
                 arguments: args
             });
         } else {
-            // CORREGIDO: Dividir solo en la primera ocurrencia de '_'
+            // Dividir solo en la primera ocurrencia de '_', sino el nombre se queda mal
             const firstUnderscoreIndex = toolName.indexOf('_');
             if (firstUnderscoreIndex === -1) {
                 throw new Error(`Invalid tool name format: ${toolName}`);
