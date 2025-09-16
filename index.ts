@@ -2,7 +2,7 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import { Tool, MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"; // ← Mantener para local
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import readline from "readline/promises";
 import dotenv from "dotenv";
 
@@ -14,70 +14,206 @@ if (!ANTHROPIC_API_KEY) {
 }
 
 class MCPClient {
-    private mcp: Client;
+    private mcpClients: Map<string, Client> = new Map();
     private anthropic: Anthropic;
-    private transport: any = null;
-    private tools: Tool[] = [];
+    private transports: Map<string, any> = new Map();
+    private allTools: Tool[] = [];
     private conversationHistory: MessageParam[] = [];
+    private mode: 'single' | 'multi' = 'single';
 
     constructor() {
         this.anthropic = new Anthropic({
             apiKey: ANTHROPIC_API_KEY,
         });
-        this.mcp = new Client({
-            name: "mcp-client-cli",
-            version: "1.0.0"
+    }
+
+    // Método para encontrar herramientas por nombre
+    private findToolByName(baseName: string): string | undefined {
+        // Coincidencia exacta
+        const exactMatch = this.allTools.find(tool => tool.name === baseName);
+        if (exactMatch) return exactMatch.name;
+
+        // Buscar por sufijo (sin el prefijo)
+        const suffixMatch = this.allTools.find(tool => {
+            const parts = tool.name.split('_');
+            return parts[parts.length - 1] === baseName;
         });
+        if (suffixMatch) return suffixMatch.name;
+
+        // Búsqueda flexible
+        const flexibleMatch = this.allTools.find(tool =>
+            tool.name.toLowerCase().includes(baseName.toLowerCase()) ||
+            baseName.toLowerCase().includes(tool.name.split('_').pop()!.toLowerCase())
+        );
+        if (flexibleMatch) return flexibleMatch.name;
+
+        console.error(`Tool not found: ${baseName}. Available tools:`, this.allTools.map(t => t.name));
+        return undefined;
     }
 
     async connectToServer(target: string) {
+        this.mode = 'single';
+        const client = new Client({
+            name: "mcp-client-cli",
+            version: "1.0.0"
+        });
+
+        let transport;
+
+        if (target.startsWith('http://') || target.startsWith('https://')) {
+            const baseUrl = new URL(target);
+            console.log(`Connecting to REMOTE MCP server: ${target}`);
+            transport = new SSEClientTransport(baseUrl);
+        } else {
+            console.log(`Connecting to LOCAL MCP server: ${target}`);
+
+            const isJs = target.endsWith(".js");
+            const isPy = target.endsWith(".py");
+
+            if (!isJs && !isPy) {
+                throw new Error("Server must be .js or .py file for local mode");
+            }
+
+            const command = isPy ? (process.platform === "win32" ? "python" : "python3") : "node";
+            transport = new StdioClientTransport({
+                command,
+                args: [target],
+            });
+        }
+
+        await client.connect(transport);
+
+        const toolsResult = await client.listTools();
+        this.allTools = toolsResult.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.inputSchema,
+        } as Tool));
+
+        this.mcpClients.set('default', client);
+        this.transports.set('default', transport);
+
+        console.log(
+            "Connected with tools:",
+            this.allTools.map((tool) => tool.name)
+        );
+    }
+
+    async connectToMultipleServers(serverType: string, target?: string) {
+        this.mode = 'multi';
         try {
-            // DETECTAR MODO: REMOTO (HTTP) vs LOCAL (archivo)
-            if (target.startsWith('http://') || target.startsWith('https://')) {
-                // MODO REMOTO
+            const client = new Client({
+                name: `mcp-client-${serverType}`,
+                version: "1.0.0"
+            });
+
+            let transport;
+
+            if (target && (target.startsWith('http://') || target.startsWith('https://'))) {
                 const baseUrl = new URL(target);
-                console.log(`Connecting to REMOTE MCP server: ${target}`);
-                this.transport = new SSEClientTransport(baseUrl);
+                console.log(`Connecting to REMOTE ${serverType} server: ${target}`);
+                transport = new SSEClientTransport(baseUrl);
             } else {
-                // MODO LOCAL
-                console.log(`Connecting to LOCAL MCP server: ${target}`);
-                const isJs = target.endsWith(".js");
-                const isPy = target.endsWith(".py");
-                
-                if (!isJs && !isPy) {
-                    throw new Error("Server must be .js or .py file for local mode");
+                console.log(`Connecting to LOCAL ${serverType} server`);
+
+                let command;
+                let args = [];
+
+                if (serverType === 'filesystem') {
+                    command = 'npx';
+                    // Usar rutas desde variable de entorno o por defecto
+                    const allowedPaths = process.env.FILESYSTEM_ALLOWED_PATHS ||
+                        'C:\\Users\\andre\\Desktop\\MCP_PROYECT\\tests';
+                    args = ['@modelcontextprotocol/server-filesystem', ...allowedPaths.split(';')];
+                } else if (serverType === 'github') {
+                    command = 'npx';
+                    args = ['@modelcontextprotocol/server-github'];
+                } else if (target) {
+                    const isJs = target.endsWith(".js");
+                    const isPy = target.endsWith(".py");
+
+                    if (!isJs && !isPy) {
+                        throw new Error("Server must be .js or .py file for custom servers");
+                    }
+
+                    command = isPy ? (process.platform === "win32" ? "python" : "python3") : "node";
+                    args = [target];
+                } else {
+                    throw new Error(`No target specified for server type: ${serverType}`);
                 }
 
-                const command = isPy ? (process.platform === "win32" ? "python" : "python3") : "node";
-                this.transport = new StdioClientTransport({
+                transport = new StdioClientTransport({
                     command,
-                    args: [target],
+                    args: args,
                 });
             }
 
-            await this.mcp.connect(this.transport);
+            await client.connect(transport);
 
-            const toolsResult = await this.mcp.listTools();
-            this.tools = toolsResult.tools.map((tool) => ({
+            const toolsResult = await client.listTools();
+            const tools = toolsResult.tools.map((tool) => ({
                 name: tool.name,
                 description: tool.description,
                 input_schema: tool.inputSchema,
             } as Tool));
 
+            const prefixedTools = tools.map(tool => ({
+                ...tool,
+                name: `${serverType}_${tool.name}`
+            }));
+
+            this.allTools = [...this.allTools, ...prefixedTools];
+            this.mcpClients.set(serverType, client);
+            this.transports.set(serverType, transport);
+
             console.log(
-                "Connected with tools:",
-                this.tools.map((tool) => tool.name)
+                `Connected to ${serverType} with tools:`,
+                tools.map((tool) => tool.name)
             );
 
         } catch (error) {
-            console.log("Failed to connect:", error);
+            console.log(`Failed to connect to ${serverType}:`, error);
             throw error;
+        }
+    }
+
+    async callTool(toolName: string, args: any) {
+        if (this.mode === 'single') {
+            const client = this.mcpClients.get('default');
+            if (!client) {
+                throw new Error("No client connected");
+            }
+
+            console.log(`Calling tool: ${toolName}`);
+            return await client.callTool({
+                name: toolName,
+                arguments: args
+            });
+        } else {
+            // CORREGIDO: Dividir solo en la primera ocurrencia de '_'
+            const firstUnderscoreIndex = toolName.indexOf('_');
+            if (firstUnderscoreIndex === -1) {
+                throw new Error(`Invalid tool name format: ${toolName}`);
+            }
+
+            const serverType = toolName.substring(0, firstUnderscoreIndex);
+            const actualToolName = toolName.substring(firstUnderscoreIndex + 1);
+
+            const client = this.mcpClients.get(serverType);
+            if (!client) {
+                throw new Error(`No client found for server type: ${serverType}`);
+            }
+
+            console.log(`Calling tool: ${actualToolName} on ${serverType}`);
+            return await client.callTool({
+                name: actualToolName,
+                arguments: args
+            });
         }
     }
 
     async processQuery(query: string) {
         try {
-            // Add user message to history
             this.conversationHistory.push({
                 role: "user",
                 content: query,
@@ -91,10 +227,10 @@ class MCPClient {
                 iteration++;
 
                 const response = await this.anthropic.messages.create({
-                    model: "claude-sonnet-4-20250514",
+                    model: "claude-3-haiku-20240307",
                     max_tokens: 1000,
                     messages: this.conversationHistory,
-                    tools: this.tools.length > 0 ? this.tools : undefined,
+                    tools: this.allTools.length > 0 ? this.allTools : undefined,
                 });
 
                 let toolUseDetected = false;
@@ -102,8 +238,6 @@ class MCPClient {
                 for (const content of response.content) {
                     if (content.type === "text") {
                         finalResponse += content.text + "\n";
-
-                        // Add assistant response to history
                         this.conversationHistory.push({
                             role: "assistant",
                             content: content.text,
@@ -114,42 +248,73 @@ class MCPClient {
                         const toolName = content.name;
                         const toolArgs = content.input;
 
-                        console.log(`Calling tool: ${toolName}`);
+                        console.log(`Claude quiere usar tool: ${toolName}`);
 
-                        // Add tool call to history
+                        const fullToolName = this.findToolByName(toolName);
+                        if (!fullToolName) {
+                            console.error(`Tool not found: ${toolName}`);
+                            finalResponse += `[Error: Tool ${toolName} not found]\n`;
+
+                            // Añadir error al historial
+                            this.conversationHistory.push({
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "tool_result",
+                                        tool_use_id: content.id,
+                                        content: `Error: Tool ${toolName} not found`,
+                                        is_error: true
+                                    }
+                                ],
+                            });
+                            continue;
+                        }
+
+                        console.log(`Calling tool with full name: ${fullToolName}`);
+
                         this.conversationHistory.push({
                             role: "assistant",
                             content: [{ type: "tool_use", ...content }],
                         });
 
-                        // Call the tool
-                        // Call the tool
-                        const result = await this.mcp.callTool({
-                            name: toolName,
-                            arguments: toolArgs as { [key: string]: unknown }, // casteo porque sino typescript se pone arisco
-                        });
+                        try {
+                            const result = await this.callTool(fullToolName, toolArgs);
 
-                        // Add tool result to history 
-                        const toolResultContent = typeof result.content === 'string'
-                            ? result.content
-                            : JSON.stringify(result.content);
+                            const toolResultContent = typeof result.content === 'string'
+                                ? result.content
+                                : JSON.stringify(result.content);
 
-                        this.conversationHistory.push({
-                            role: "user",
-                            content: [
-                                {
-                                    type: "tool_result",
-                                    tool_use_id: content.id,
-                                    content: toolResultContent
-                                }
-                            ],
-                        });
+                            this.conversationHistory.push({
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "tool_result",
+                                        tool_use_id: content.id,
+                                        content: toolResultContent
+                                    }
+                                ],
+                            });
 
-                        finalResponse += `[Used tool: ${toolName}]\n`;
+                            finalResponse += `[Used tool: ${fullToolName}]\n`;
+                        } catch (error) {
+                            console.error(`Tool error: ${error}`);
+                            finalResponse += `[Tool error: ${error.message}]\n`;
+
+                            this.conversationHistory.push({
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "tool_result",
+                                        tool_use_id: content.id,
+                                        content: `Error: ${error.message}`,
+                                        is_error: true
+                                    }
+                                ],
+                            });
+                        }
                     }
                 }
 
-                // If no tools were used, break the loop
                 if (!toolUseDetected) {
                     break;
                 }
@@ -175,8 +340,10 @@ class MCPClient {
 
         try {
             console.log("MCP Client Started!");
+            console.log("Mode:", this.mode);
             console.log("Type your queries or 'quit' to exit.");
             console.log("Type 'clear' to reset conversation history.");
+            console.log("Available tools:", this.allTools.map(t => t.name));
 
             while (true) {
                 const message = await rl.question("Query: ");
@@ -191,48 +358,16 @@ class MCPClient {
                     continue;
                 }
 
-                if (message.toLowerCase() === "history_summary") {
-                    console.log("\nConversation History (Summary):");
-                    this.conversationHistory.forEach((msg, index) => {
-                        const role = msg.role === "user" ? "User" : "Assistant";
-                        let contentPreview = "";
-
-                        if (typeof msg.content === "string") {
-                            contentPreview = msg.content.substring(0, 50) + (msg.content.length > 50 ? "..." : "");
-                        } else if (Array.isArray(msg.content)) {
-                            // Para tool calls y tool results
-                            const firstItem = msg.content[0];
-                            if (firstItem.type === "tool_use") {
-                                contentPreview = `Tool Call: ${firstItem.name}`;
-                            } else if (firstItem.type === "tool_result") {
-                                contentPreview = "Tool Result";
-                            } else {
-                                contentPreview = "Complex content";
-                            }
-                        }
-
-                        console.log(`${index + 1}. ${role}: ${contentPreview}`);
+                if (message.toLowerCase() === "tools") {
+                    console.log("\nAvailable Tools:");
+                    this.allTools.forEach((tool, index) => {
+                        console.log(`${index + 1}. ${tool.name}: ${tool.description}`);
                     });
                     continue;
                 }
 
-                if (message.toLowerCase() === "history_complete") {
-                    console.log("\nConversation History (Complete):");
-                    this.conversationHistory.forEach((msg, index) => {
-                        const role = msg.role === "user" ? "User" : "Assistant";
-
-                        let contentStr = "";
-                        if (typeof msg.content === "string") {
-                            contentStr = msg.content;
-                        } else if (Array.isArray(msg.content)) {
-                            contentStr = JSON.stringify(msg.content, null, 2);
-                        } else {
-                            contentStr = String(msg.content);
-                        }
-
-                        console.log(`${index + 1}. ${role}: ${contentStr}`);
-                        console.log("---"); 
-                    });
+                if (message.toLowerCase() === "mode") {
+                    console.log("Current mode:", this.mode);
                     continue;
                 }
 
@@ -249,7 +384,10 @@ class MCPClient {
 
     async cleanup() {
         try {
-            await this.mcp.close();
+            for (const [serverType, client] of this.mcpClients.entries()) {
+                await client.close();
+                console.log(`Closed connection to ${serverType}`);
+            }
         } catch (error) {
             console.error("Error during cleanup:", error);
         }
@@ -258,16 +396,25 @@ class MCPClient {
 
 async function main() {
     if (process.argv.length < 3) {
-        console.log("Usage: node client.js <path_to_server_script>");
+        console.log("Usage: node client.js <server_target>");
+        console.log("For multiple servers: node client.js --multi");
         process.exit(1);
     }
 
-    const serverScriptPath = process.argv[2];
     const mcpClient = new MCPClient();
 
     try {
-        await mcpClient.connectToServer(serverScriptPath);
+        if (process.argv[2] === '--multi') {
+            console.log("Multi-server mode");
+            await mcpClient.connectToMultipleServers('filesystem');
+            await mcpClient.connectToMultipleServers('github');
+        } else {
+            const serverTarget = process.argv[2];
+            await mcpClient.connectToServer(serverTarget);
+        }
+
         await mcpClient.chatLoop();
+
     } catch (error) {
         console.error("Fatal error:", error);
     } finally {
