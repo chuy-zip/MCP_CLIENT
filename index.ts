@@ -118,16 +118,26 @@ class MCPClient {
 
                 let command;
                 let args = [];
+                let env = {};
 
                 if (serverType === 'filesystem') {
                     command = 'npx';
-                    // Usar rutas desde variable de entorno o por defecto
                     const allowedPaths = process.env.FILESYSTEM_ALLOWED_PATHS ||
                         'C:\\Users\\andre\\Desktop\\MCP_PROYECT\\tests';
                     args = ['@modelcontextprotocol/server-filesystem', ...allowedPaths.split(';')];
                 } else if (serverType === 'github') {
                     command = 'npx';
                     args = ['@modelcontextprotocol/server-github'];
+
+                    // ← AÑADIR VARIABLES DE ENTORNO PARA GITHUB
+                    const githubToken = process.env.GITHUB_TOKEN;
+                    if (!githubToken) {
+                        throw new Error("GITHUB_TOKEN environment variable is required for GitHub server");
+                    }
+                    env = {
+                        GITHUB_PERSONAL_ACCESS_TOKEN: githubToken,
+                    };
+                    console.log("GitHub token configured");
                 } else if (target) {
                     const isJs = target.endsWith(".js");
                     const isPy = target.endsWith(".py");
@@ -145,6 +155,7 @@ class MCPClient {
                 transport = new StdioClientTransport({
                     command,
                     args: args,
+                    env: { ...process.env, ...env } // variables env
                 });
             }
 
@@ -185,9 +196,20 @@ class MCPClient {
             }
 
             console.log(`Calling tool: ${toolName}`);
+
+            // DETECTAR SERVIDOR PYTHON (FastMCP)
+            const target = process.argv[2];
+            let toolArgs = args;
+
+            if (target && target.endsWith('.py')) {
+                // FastMCP espera { params: {...} }
+                toolArgs = { params: args };
+                console.log(`Adapting for FastMCP Python server`);
+            }
+
             return await client.callTool({
                 name: toolName,
-                arguments: args
+                arguments: toolArgs
             });
         } else {
             // Dividir solo en la primera ocurrencia de '_', sino el nombre se queda mal

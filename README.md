@@ -8,9 +8,13 @@ npm install
 ### Local MCP
 node build/index.js "Ruta a donde se clono el server"
 
-Ejemplo
+### Ejemplo
 
 node build/index.js ../MCP_SERVER/build/index.js
+
+node build/index.js ../MCP-historical-local-server-main/HistoricalLocalServer/historical_mcp.py
+
+node build/index.js ../trainer-mcp/server.py
 
 
 ### External MCP
