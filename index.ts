@@ -50,6 +50,69 @@ class MCPClient {
         console.error(`Tool not found: ${baseName}. Available tools:`, this.allTools.map(t => t.name));
         return undefined;
     }
+    private showHistorySummary() {
+        console.log("\nConversation History (Summary):");
+        if (this.conversationHistory.length === 0) {
+            console.log("No history yet.");
+            return;
+        }
+
+        this.conversationHistory.forEach((msg, index) => {
+            const role = msg.role === "user" ? "User" : "Assistant";
+            let contentPreview = "";
+
+            if (typeof msg.content === "string") {
+                contentPreview = msg.content.substring(0, 50) +
+                    (msg.content.length > 50 ? "..." : "");
+            } else if (Array.isArray(msg.content)) {
+                const firstItem = msg.content[0];
+                if (firstItem.type === "tool_use") {
+                    contentPreview = `Tool Call: ${firstItem.name}`;
+                } else if (firstItem.type === "tool_result") {
+                    contentPreview = "Tool Result";
+                } else if (firstItem.type === "text") {
+                    contentPreview = firstItem.text.substring(0, 50) +
+                        (firstItem.text.length > 50 ? "..." : "");
+                } else {
+                    contentPreview = "Complex content";
+                }
+            }
+
+            console.log(`${index + 1}. ${role}: ${contentPreview}`);
+        });
+    }
+
+    private showCompleteHistory() {
+        console.log("\nConversation History (Complete):");
+        if (this.conversationHistory.length === 0) {
+            console.log("No history yet.");
+            return;
+        }
+
+        this.conversationHistory.forEach((msg, index) => {
+            const role = msg.role === "user" ? "User" : "Assistant";
+            console.log(`\n--- ${index + 1}. ${role} ---`);
+
+            if (typeof msg.content === "string") {
+                console.log(msg.content);
+            } else if (Array.isArray(msg.content)) {
+                msg.content.forEach((item, itemIndex) => {
+                    if (item.type === "text") {
+                        console.log(`Text: ${item.text}`);
+                    } else if (item.type === "tool_use") {
+                        console.log(`Tool Call: ${item.name}`);
+                        console.log(`Arguments: ${JSON.stringify(item.input, null, 2)}`);
+                    } else if (item.type === "tool_result") {
+                        console.log(`Tool Result: ${item.content}`);
+                        if (item.is_error) {
+                            console.log("(Error)");
+                        }
+                    }
+                });
+            }
+            console.log("---");
+        });
+    }
 
     async connectToServer(target: string) {
         this.mode = 'single';
@@ -197,14 +260,15 @@ class MCPClient {
 
             console.log(`Calling tool: ${toolName}`);
 
-            // DETECTAR SERVIDOR PYTHON (FastMCP)
-            const target = process.argv[2];
             let toolArgs = args;
 
-            if (target && target.endsWith('.py')) {
-                // FastMCP espera { params: {...} }
+            // SOLO aplicar wrapper para archivos .py LOCALES
+            const target = process.argv[2];
+            const isLocalPython = target && target.endsWith('.py') && !target.startsWith('http');
+
+            if (isLocalPython) {
                 toolArgs = { params: args };
-                console.log(`Adapting for FastMCP Python server`);
+                console.log(`Adapting for local Python FastMCP server`);
             }
 
             return await client.callTool({
@@ -249,7 +313,7 @@ class MCPClient {
                 iteration++;
 
                 const response = await this.anthropic.messages.create({
-                    model: "claude-3-haiku-20240307",
+                    model: "claude-sonnet-4-20250514",
                     max_tokens: 1000,
                     messages: this.conversationHistory,
                     tools: this.allTools.length > 0 ? this.allTools : undefined,
@@ -361,10 +425,10 @@ class MCPClient {
         });
 
         try {
+            // En chatLoop(), actualiza el mensaje inicial:
             console.log("MCP Client Started!");
             console.log("Mode:", this.mode);
-            console.log("Type your queries or 'quit' to exit.");
-            console.log("Type 'clear' to reset conversation history.");
+            console.log("Commands: 'quit', 'clear', 'tools', 'mode', 'history', 'history_full'");
             console.log("Available tools:", this.allTools.map(t => t.name));
 
             while (true) {
@@ -390,6 +454,17 @@ class MCPClient {
 
                 if (message.toLowerCase() === "mode") {
                     console.log("Current mode:", this.mode);
+                    continue;
+                }
+
+                // NUEVOS COMANDOS DE HISTORIAL
+                if (message.toLowerCase() === "history") {
+                    this.showHistorySummary();
+                    continue;
+                }
+
+                if (message.toLowerCase() === "history_full") {
+                    this.showCompleteHistory();
                     continue;
                 }
 
