@@ -252,28 +252,30 @@ class MCPClient {
     }
 
     async callTool(toolName: string, args: any) {
+
+        console.log(`- CALLTOOL - Tool: ${toolName}`);
+        console.log(`- CALLTOOL - Args recibidos:`, JSON.stringify(args, null, 2));
+        console.log(`- CALLTOOL - Mode: ${this.mode}`);
+
         if (this.mode === 'single') {
             const client = this.mcpClients.get('default');
             if (!client) {
                 throw new Error("No client connected");
             }
 
-            console.log(`Calling tool: ${toolName}`);
+            console.log(`Calling tool: ${toolName} with args:`, JSON.stringify(args, null, 2));
 
-            let toolArgs = args;
-
-            // SOLO aplicar wrapper para archivos .py LOCALES
-            const target = process.argv[2];
-            const isLocalPython = target && target.endsWith('.py') && !target.startsWith('http');
-
-            if (isLocalPython) {
-                toolArgs = { params: args };
-                console.log(`Adapting for local Python FastMCP server`);
-            }
+            // Esto era un fixx pra un servidor mcp, perooo al final no era necesario
+            // const target = process.argv[2];
+            // const isLocalPython = target && target.endsWith('.py') && !target.startsWith('http');
+            // if (isLocalPython) {
+            //     toolArgs = { params: args };
+            //     console.log(`Adapting for local Python FastMCP server`);
+            // }
 
             return await client.callTool({
                 name: toolName,
-                arguments: toolArgs
+                arguments: args  // Enviar los argumentos directamente
             });
         } else {
             // Dividir solo en la primera ocurrencia de '_', sino el nombre se queda mal
